@@ -1,6 +1,6 @@
 @echo off
 setlocal enabledelayedexpansion
-set "POPPLER_BIN=C:\Users\LAB1223\anaconda3\envs\fontenv\Library\bin\pdftoppm.exe"
+set "POPPLER_BIN=C:\Users\cg\miniconda3\envs\fontenv\Library\bin\pdftoppm.exe"
 
 for %%f in (*.pdf) do (
     echo [*] Processing... %%f
@@ -36,4 +36,3 @@ for %%f in (*.pdf) do (
 
 echo.
 echo === Conversion Completed ===
-pause

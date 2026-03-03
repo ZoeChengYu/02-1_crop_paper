@@ -3,8 +3,7 @@ from tqdm import tqdm
 import os
 
 # 設定 Poppler 路徑 (請確認你的 Poppler 安裝位置)
-poppler_path = r"C:\Users\ctl20\.conda\envs\fontenv\Library\bin" 
-# "C:\Users\ctl20\.conda\envs\fontenv\Library\bin\pdftoppm.exe"
+poppler_path = r"C:\Users\cg\miniconda3\envs\fontenv\Library\bin" 
 
 # 轉換 PDF 為 PNG 圖片
 def pdf_to_png(pdf_path, output_folder, start_page=1, end_page=None, dpi=600):
