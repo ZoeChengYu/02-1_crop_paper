@@ -71,8 +71,20 @@ python s1_rotate_page.py
 #### 2. 切割稿紙
 - 將 ` \01-1_generate_paper\2_generate_manuscript\CP950` 複製到 `\02-1_crop_paper`
 - 在 `s2_crop_page.py` 更改 `image_folder`, `json_path` 的位置
-  - `image_folder`：校正後的資料夾位置
-  - `json_path`：原先製作此稿紙的 `CP950-{標題}` 位置
+  - `input_folder`：校正後的資料夾位置
+  - `output_folder`：切割後輸出資料夾位置
+    ```
+    📁crop
+    ├── crop_千字文
+    ├── crop_長恨歌
+    ├── crop_洛神賦
+    ├── crop_詩經
+    ├── crop_部首、注音、日文
+    ├── crop_英文、數字
+    ├── crop_標點符號
+    └── crop_姓氏名字號
+    ```
+  - `json_path`：原先製作此稿紙的 `CP950\CP950-{標題}` 位置
 - 執行程式
     ```
     python s2_crop_page.py
