@@ -15,6 +15,7 @@ QR_RATIO = 0.12
 
 
 def imread_unicode(path, flags=cv2.IMREAD_COLOR):
+    """支援 Windows 中文路徑讀圖"""
     path = str(path)
     if not Path(path).exists():
         return None
@@ -25,6 +26,7 @@ def imread_unicode(path, flags=cv2.IMREAD_COLOR):
 
 
 def imwrite_unicode(path, image):
+    """支援 Windows 中文路徑寫圖"""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     ext = path.suffix or ".png"
@@ -36,6 +38,10 @@ def imwrite_unicode(path, image):
 
 
 def read_unicode_list(json_path, unicode_num):
+    """
+    讀取 CP950 JSON，轉成 U+XXXX / U+XXXXX 格式清單
+    對應 2_generate_CP950.py 的結構
+    """
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -60,6 +66,12 @@ def make_unique_filename(base_name, used_names):
 
 
 def extract_page_number(path):
+    """
+    支援：
+    - page-001_qr-1.png
+    - page-001.png
+    - page-1.png
+    """
     name = Path(path).name
     patterns = [
         r"page-(\d+)_qr-(\d+)\.png$",
@@ -86,6 +98,9 @@ def collect_page_images(input_folder, start_page, end_page):
 
 
 def find_boxes_from_page(img_color, debug_name="debug"):
+    """
+    找整頁的方框，每頁預期 100 格
+    """
     gray = cv2.cvtColor(img_color, cv2.COLOR_BGR2GRAY)
     binary = cv2.threshold(gray, 220, 255, cv2.THRESH_BINARY_INV)[1]
 
@@ -110,6 +125,7 @@ def find_boxes_from_page(img_color, debug_name="debug"):
         if 0.75 <= ratio <= 1.25:
             boxes.append((x, y, w, h))
 
+    # row-major 排序：由上到下、由左到右
     boxes.sort(key=lambda b: (round(b[1] / 120), b[0]))
     return boxes[:100]
 
@@ -146,22 +162,37 @@ def preprocess_cropped_image(cropped_gray, min_area_threshold):
     return cleaned
 
 
+def erase_border_lines(gray_img, border=8):
+    """
+    將裁下來的小圖四周邊界直接塗白，去掉稿紙框線殘留
+    """
+    result = gray_img.copy()
+    h, w = result.shape[:2]
+
+    result[:border, :] = 255
+    result[h - border:h, :] = 255
+    result[:, :border] = 255
+    result[:, w - border:w] = 255
+
+    return result
+
+
 def normalize_character_image(word_img, img_name, save_annotated=True, output_size=300):
     """
-    改良版：
-    1. 先找真正字的外接框
-    2. 依字大小加 padding
-    3. 再額外加一圈安全邊界，避免像「賤」這種貼邊字被切掉
-    4. 補成正方形後 resize
+    1. 先補白，避免原始字貼邊
+    2. 找字的緊外接框
+    3. 動態加 padding
+    4. 再加固定安全邊界
+    5. 補成正方形 resize
     """
     if len(word_img.shape) == 3:
         gray = cv2.cvtColor(word_img, cv2.COLOR_BGR2GRAY)
     else:
         gray = word_img.copy()
 
-    # 建議先在整張圖四周補白，避免一開始字就貼邊導致 boundingRect 太緊
     gray = cv2.copyMakeBorder(
-        gray, 20, 20, 20, 20,
+        gray,
+        28, 28, 28, 28,
         borderType=cv2.BORDER_CONSTANT,
         value=255
     )
@@ -183,9 +214,8 @@ def normalize_character_image(word_img, img_name, save_annotated=True, output_si
 
     tight = gray[y:y + h, x:x + w]
 
-    # 基本 padding：依字尺寸決定
-    pad_x = max(18, int(w * 0.22))
-    pad_y = max(18, int(h * 0.22))
+    pad_x = max(22, int(w * 0.28))
+    pad_y = max(22, int(h * 0.28))
 
     padded = cv2.copyMakeBorder(
         tight,
@@ -194,8 +224,7 @@ def normalize_character_image(word_img, img_name, save_annotated=True, output_si
         value=255,
     )
 
-    # 再加一層固定安全邊界，專門防止「賤、讓、籤、鬱」這種字被切到
-    safety = 24
+    safety = 28
     padded = cv2.copyMakeBorder(
         padded,
         safety, safety, safety, safety,
@@ -221,7 +250,6 @@ def crop_boxes(
     start_page,
     end_page,
     min_box_size,
-    padding,
     json_path,
     unicode_num,
     min_area_threshold,
@@ -257,6 +285,9 @@ def crop_boxes(
         boxes = find_boxes_from_page(img_color, debug_name=f"page_{page_num}")
         print(f"  detected boxes: {len(boxes)}")
 
+        if len(boxes) != 100:
+            print(f"  Warning: 預期 100 格，實際偵測 {len(boxes)} 格")
+
         draw_detected_boxes(
             img_color,
             boxes,
@@ -269,11 +300,16 @@ def crop_boxes(
             if k >= unicode_num:
                 break
 
-            # 內縮去掉外框線
-            x2 = x + padding
-            y2 = y + padding
-            w2 = w - 2 * padding
-            h2 = h - 2 * padding
+            # 小幅內縮，盡量保留字；框線改由 erase_border_lines 處理
+            pad_left = 4
+            pad_right = 4
+            pad_top = 4
+            pad_bottom = 4
+
+            x2 = x + pad_left
+            y2 = y + pad_top
+            w2 = w - pad_left - pad_right
+            h2 = h - pad_top - pad_bottom
 
             if w2 <= 0 or h2 <= 0:
                 continue
@@ -286,6 +322,7 @@ def crop_boxes(
 
             cropped_gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
             processed = preprocess_cropped_image(cropped_gray, min_area_threshold)
+            processed = erase_border_lines(processed, border=10)
 
             final_img = normalize_character_image(
                 processed,
@@ -320,7 +357,6 @@ if __name__ == "__main__":
 
     min_box_size = 120
     min_area_threshold = 10
-    padding = 20
     json_path = r".\CP950\CP950-千字文.json"
     unicode_num = 1000
 
@@ -330,7 +366,6 @@ if __name__ == "__main__":
         start_page=start_page,
         end_page=end_page,
         min_box_size=min_box_size,
-        padding=padding,
         json_path=json_path,
         unicode_num=unicode_num,
         min_area_threshold=min_area_threshold,
