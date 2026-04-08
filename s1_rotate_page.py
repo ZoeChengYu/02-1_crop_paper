@@ -5,6 +5,22 @@ from tqdm import tqdm
 import argparse
 from natsort import ns, natsorted
 
+def imread_unicode(file_path):
+    try:
+        data = np.fromfile(file_path, dtype=np.uint8)
+        if data.size == 0:
+            return None
+        img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+        return img
+    except Exception:
+        return None
+    
+def imwrite_unicode(file_path, image):
+    ext = os.path.splitext(file_path)[1]
+    success, encoded = cv2.imencode(ext, image)
+    if success:
+        encoded.tofile(file_path)
+    return success
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Step 1 rotate scan page')
@@ -83,7 +99,8 @@ def get_skew_angle(image) -> float:
 
 def saveImage(image, now_page, index):
     global result_path
-    cv2.imwrite(f'./{result_path}/page-{index + 1:03d}_qr-{now_page}.png', image)
+    out_path = os.path.join(result_path, f'page-{index + 1:03d}_qr-{now_page}.png')
+    imwrite_unicode(out_path, image)
 
 
 def try_decode_with_variants(image):
@@ -177,9 +194,9 @@ def get_qrcode_crop(gray, bbox, region, x_offset, y_offset, width, height, scale
 def rotate_img(file_path, index) -> bool:
     """主程式，以 QR Code 旋轉稿紙"""
     try:
-        img = cv2.imread(file_path)
+        img = imread_unicode(file_path)
         if img is None:
-            print(f"\n錯誤檔案：{file_path}，cv2.imread 失敗")
+            print(f"\n錯誤檔案：{file_path}，影像讀取失敗")
             return False
     except Exception as e:
         print(f"\n錯誤檔案：{file_path}, {e}")
@@ -273,7 +290,7 @@ if __name__ == '__main__':
     page_count = {}
 
     for index in tqdm(range(len(allFileList))):
-        filePath = target_path + "/" + allFileList[index]
+        filePath = os.path.join(target_path, allFileList[index])
         if not rotate_img(filePath, index):
             errorList.append(allFileList[index])
 
