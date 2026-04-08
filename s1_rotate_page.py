@@ -5,75 +5,31 @@ from tqdm import tqdm
 import argparse
 from natsort import ns, natsorted
 
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Step 1 rotate scan page')
 
-    parser.add_argument('--name',
-                        help='To rotated page from target folder',
-                        default=None, 
-                        type=str)
+    parser.add_argument(
+        '--name',
+        help='To rotated page from target folder',
+        default=None,
+        type=str
+    )
 
     args = parser.parse_args()
 
-    # 如果執行時沒有給 --id 參數，就用 input() 詢問
     if args.name is None:
         args.name = input("請輸入目標資料夾名稱：").strip()
-        
+
     return args
 
-def zoom_qrcode_finder(image, qrcode, thresh=64):
-    """放大處理QRCode位置，二值化處理並搜尋 QR Code 位置
-    
-    Keyword arguments: 
-        image -- 要搜尋的圖片
-    Return:
-        now_page -- 檔案頁面
-        bbox -- QR Code 邊界
-        None -- 找不到 QR Code
-    """
-    h, w = image.shape
-    crop_h = h // 3
-    crop_w = w // 3
-    scale_h = crop_h / h
-    scale_w = crop_w / w
-    crop_img = image[h - crop_h : h, w - crop_w : w]
-    zoom_img = cv2.resize(crop_img, (w, h))
-    zoom_img = cv2.threshold(zoom_img, thresh, 255, cv2.THRESH_BINARY)[1]
-    now_page, bbox, _ = qrcode.detectAndDecode(zoom_img)
-
-    if bbox is not None:
-        bbox[:, :, 0] = bbox[:, :, 0] * scale_w + w - crop_w
-        bbox[:, :, 1] = bbox[:, :, 1] * scale_h + h - crop_h
-        return now_page, bbox
-
-    elif thresh == 192:
-        return None
-    return zoom_qrcode_finder(image, qrcode, thresh + 64)
-
-
-def qrcode_finder(image):
-    """搜尋 QR Code 位置
-    
-    Keyword arguments: 
-        image -- 要搜尋的圖片
-    Return:
-        now_page -- 檔案頁面
-        bbox -- QR Code 邊界
-        None -- 找不到 QR Code
-    """
-    qrcode = cv2.QRCodeDetector()
-    now_page, bbox, rectified = qrcode.detectAndDecode(image)
-
-    if bbox is None:
-        return zoom_qrcode_finder(image, qrcode)
-    return now_page, bbox
 
 def boxSize(arr):
     """獲取 bbox 的最大以及最小 X, Y
-    
-    Keyword arguments: 
+
+    Keyword arguments:
         arr -- bbox
-    Return: 
+    Return:
         (min_x, min_y, max_x, max_y)
     """
     box_roll = np.rollaxis(arr, 1, 0)
@@ -83,135 +39,228 @@ def boxSize(arr):
     ymin = int(np.amin(box_roll[1]))
     return (xmin, ymin, xmax, ymax)
 
-# def get_skew_angle(qrcode_img) -> float:
-#     """計算角度
-    
-#     Keyword arguments:
-#         qrcode_img -- 含有 qrcode 的圖片
-#     Return:
-#         angle -- 角度 float
-#     """
 
-#     # cv2.imshow("test", qrcode_img)
-#     # cv2.waitKey(0)
+def get_skew_angle(image) -> float:
+    """用整張圖的長直線估計傾斜角度（單位：度）"""
+    if image is None or image.size == 0:
+        return 0.0
 
-#     gray = 255 - qrcode_img
-#     thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+    # 邊緣
+    edges = cv2.Canny(image, 50, 150, apertureSize=3)
 
-#     coords = np.column_stack(np.where(thresh > 0))
-#     angle = cv2.minAreaRect(coords)[-1] # (0, 90]
+    # 找線段
+    lines = cv2.HoughLinesP(
+        edges,
+        rho=1,
+        theta=np.pi / 180,
+        threshold=100,
+        minLineLength=min(image.shape[:2]) // 4,
+        maxLineGap=20
+    )
 
-#     if angle > 45:
-#         angle = 90 - angle
-#     else:
-#         angle = -angle
+    if lines is None:
+        return 0.0
 
-#     return angle
-def get_skew_angle(qrcode_img) -> float:
-    # 增加模糊度以去除 QR Code 內部的細節噪點，只保留整體的方塊輪廓
-    blur = cv2.medianBlur(qrcode_img, 5)
-    
-    # 二值化
-    gray = 255 - blur
-    thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+    angles = []
+    for line in lines:
+        x1, y1, x2, y2 = line[0]
+        dx = x2 - x1
+        dy = y2 - y1
+        if dx == 0:
+            continue
 
-    # 獲取所有白色像素點
-    coords = np.column_stack(np.where(thresh > 0))
-    
-    # 獲取最小外接矩形
-    rect = cv2.minAreaRect(coords)
-    angle = rect[-1]
+        angle = np.degrees(np.arctan2(dy, dx))
 
-    # 找到與水平或垂直線的微小偏差
-    if angle < 45:
-        angle = -angle
-    else:
-        angle = 90 - angle
-        
-    return angle
+        # 只保留接近水平的線，避免垂直邊干擾
+        if -45 < angle < 45:
+            angles.append(angle)
 
-def saveImage(image, now_page):
-    """儲存 png 至 ./rotated/ 底下
-    
-    Keyword arguments:
-        image -- 要存的圖片
-        now_page -- 頁面 index
-    """
+    if not angles:
+        return 0.0
+
+    return float(np.median(angles))
+
+
+def saveImage(image, now_page, index):
     global result_path
-    #print("now page is",now_page)
-    cv2.imwrite(f'./{result_path}/page-{now_page}.png', image)
+    cv2.imwrite(f'./{result_path}/page-{index + 1:03d}_qr-{now_page}.png', image)
+
+
+def try_decode_with_variants(image):
+    """對同一張灰階圖做多種前處理後依序偵測 QR code"""
+    if image is None or image.size == 0:
+        return None, None
+
+    qrcode = cv2.QRCodeDetector()
+    h, w = image.shape[:2]
+
+    candidates = []
+
+    # 原圖
+    candidates.append(("orig", image))
+
+    # OTSU 二值化
+    th1 = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+    candidates.append(("otsu", th1))
+
+    # 反相後 OTSU
+    inv = 255 - image
+    th2 = cv2.threshold(inv, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+    candidates.append(("inv_otsu", th2))
+
+    # 輕微模糊
+    blur3 = cv2.GaussianBlur(image, (3, 3), 0)
+    candidates.append(("blur3", blur3))
+
+    # 放大 2 倍
+    up2 = cv2.resize(image, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
+    candidates.append(("up2", up2))
+
+    # 放大 2 倍後 OTSU
+    up2_th = cv2.threshold(up2, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+    candidates.append(("up2_otsu", up2_th))
+
+    for _, img_try in candidates:
+        now_page, bbox, _ = qrcode.detectAndDecode(img_try)
+        if bbox is not None:
+            hh, ww = img_try.shape[:2]
+            if hh != h or ww != w:
+                scale_x = w / ww
+                scale_y = h / hh
+                bbox = bbox.copy()
+                bbox[:, :, 0] *= scale_x
+                bbox[:, :, 1] *= scale_y
+            return now_page, bbox
+
+    return None, None
+
+
+def qrcode_finder(image):
+    """搜尋 QR Code 位置，失敗時固定回傳 (None, None)"""
+    now_page, bbox = try_decode_with_variants(image)
+    return now_page, bbox
+
+
+def crop_region(image, region_name, center_h, center_w, height, width):
+    """依區域名稱裁切影像"""
+    if region_name == "full":
+        return image, 0, 0
+
+    if region_name == "left_top":
+        return image[0:center_h, 0:center_w], 0, 0
+
+    if region_name == "right_top":
+        return image[0:center_h, center_w:width], center_w, 0
+
+    if region_name == "left_bottom":
+        return image[center_h:height, 0:center_w], 0, center_h
+
+    if region_name == "right_bottom":
+        return image[center_h:height, center_w:width], center_w, center_h
+
+    return image, 0, 0
+
+
+def get_qrcode_crop(gray, bbox, region, x_offset, y_offset, width, height, scale=30):
+    """依 bbox 與區域偏移，從原圖灰階圖中取出 QR code 區塊"""
+    box = boxSize(bbox[0])
+
+    x1 = max(box[0] + x_offset - scale, 0)
+    y1 = max(box[1] + y_offset - scale, 0)
+    x2 = min(box[2] + x_offset + scale, width)
+    y2 = min(box[3] + y_offset + scale, height)
+
+    crop = gray[y1:y2, x1:x2]
+    return crop
 
 
 def rotate_img(file_path, index) -> bool:
-    """主程式，以 QR Code 旋轉稿紙
-    
-    Keyword arguments:
-        file_path -- 檔案路徑
-    Return:
-        True -- 執行成功
-        False -- 錯誤
-    """
-
-    # Read Image from path
+    """主程式，以 QR Code 旋轉稿紙"""
     try:
         img = cv2.imread(file_path)
-    except:
-        print("\n 錯誤檔案：{}".format(file_path))
+        if img is None:
+            print(f"\n錯誤檔案：{file_path}，cv2.imread 失敗")
+            return False
+    except Exception as e:
+        print(f"\n錯誤檔案：{file_path}, {e}")
         return False
+
     height, width, _ = img.shape
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (9, 9), 0)
+
+    # 不要一開始做太重的模糊，避免 QR 細節流失
+    work = gray
+
     center_w = width // 2
     center_h = height // 2
 
-    # QRCode detector
-    right_bottom = blur[center_h : height, center_w : width]
-    IsRightBottom = True
-    now_page, bbox = qrcode_finder(right_bottom)
-    # if there is no qrcode in the right bottom corner
+    search_order = [
+        "full",
+        "right_bottom",
+        "left_top",
+        "right_top",
+        "left_bottom",
+    ]
+
+    now_page = None
+    bbox = None
+    used_region = None
+    x_offset = 0
+    y_offset = 0
+
+    for region in search_order:
+        region_img, x_off, y_off = crop_region(
+            work, region, center_h, center_w, height, width
+        )
+        candidate_now_page, candidate_bbox = qrcode_finder(region_img)
+
+        if candidate_bbox is not None:
+            now_page = candidate_now_page
+            bbox = candidate_bbox
+            used_region = region
+            x_offset = x_off
+            y_offset = y_off
+            break
+
     if bbox is None:
-        left_top = blur[0 : center_h, 0 : center_w]
-        now_page, bbox = qrcode_finder(left_top)
-        IsRightBottom = False
-    if bbox is None: return False
+        print(f"找不到 QRCode bbox：{file_path}")
+        return False
+
     if now_page == 'https://tjhsieh.github.io/c/ct/ct2023s/syllabus/index.html':
         now_page = str(index + 1)
-        #print(f'\nGet information from QR code failed, replace to "{now_page}.png", file path: {file_path}')
-        #print(f'Warning: It may contained page error, please check it manually')
-    elif now_page == '':
+    elif now_page == '' or now_page is None:
         now_page = str(index + 1)
 
-    # Calculate qrcode angle
-    box = boxSize(bbox[0])
-    scale = 30
-    angle = 0
-    # check if there is a qrcode in the right bottom corner
-    if IsRightBottom:
-        angle = get_skew_angle(gray[
-            box[1] + center_h - scale : box[3] + center_h + scale,
-            box[0] + center_w - scale : box[2] + center_w+ scale
-        ])
-    else:
-        angle = get_skew_angle(gray[
-            box[1] - scale : box[3] + scale,
-            box[0] - scale : box[2] + scale
-        ])
+    qrcode_crop = get_qrcode_crop(
+        gray, bbox, used_region, x_offset, y_offset, width, height, scale=30
+    )
 
-    # Rotate Image
+    if qrcode_crop is None or qrcode_crop.size == 0:
+        print(f"QRCode 區域裁切失敗：{file_path}")
+        return False
+
+    angle = get_skew_angle(qrcode_crop)
+
     M = cv2.getRotationMatrix2D((width // 2, height // 2), angle, 1.0)
-    rotated = cv2.warpAffine(img, M, (width, height), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+    rotated = cv2.warpAffine(
+        img,
+        M,
+        (width, height),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REPLICATE
+    )
 
-    # Write Image
-    saveImage(rotated, now_page)
-
+    saveImage(rotated, now_page, index)
     return True
+
 
 if __name__ == '__main__':
     args = parse_args()
     target_folder = args.name
 
-    target_path = f'./{target_folder}' # !!! 目標資料夾 !!!
-    result_path = f'rotated_{target_folder}' # 存放資料夾
+    target_path = f'./{target_folder}'
+    result_path = f'rotated_{target_folder}'
+
     if not os.path.exists(result_path):
         os.makedirs(result_path)
 
@@ -220,16 +269,17 @@ if __name__ == '__main__':
     errorList = []
     allFileList = os.listdir(target_path)
     allFileList = natsorted(allFileList, alg=ns.PATH)
+
+    page_count = {}
+
     for index in tqdm(range(len(allFileList))):
         filePath = target_path + "/" + allFileList[index]
-        #print(filePath)
         if not rotate_img(filePath, index):
             errorList.append(allFileList[index])
 
     print("Rotate successfully")
 
     if len(errorList):
-        # 錯誤原因為 QR Code 無法偵測
         print("The following is the wrong file, please rotate it yourself：")
         for errPath in errorList:
             print(errPath)

@@ -6,7 +6,7 @@ for %%f in (*.pdf) do (
     echo [*] Processing... %%f
 
     :: 抓取檔名並建立資料夾
-    set "outdir=rotated_%%~nf"
+    set "outdir=rotated_jpg_%%~nf"
     mkdir "!outdir!" 2>nul
     
     :: 執行轉換
@@ -25,8 +25,8 @@ for %%f in (*.pdf) do (
             :: 重新命名為不補零的格式
             for /f "tokens=* delims=0" %%b in ("!num!") do (
                 if "%%b"=="" (set "final_num=0") else (set "final_num=%%b")
-                if not "!oldname!"=="page-!final_num!.png" (
-                    ren "!oldname!" "page-!final_num!.png"
+                if not "!oldname!"=="page-!final_num!.jpg" (
+                    ren "!oldname!" "page-!final_num!.jpg"
                 )
             )
         )
