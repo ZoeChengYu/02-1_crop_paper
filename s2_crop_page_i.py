@@ -29,30 +29,25 @@ def imread_unicode(path, flags=cv2.IMREAD_COLOR):
 
 def imwrite_unicode(path, image):
     """支援 Windows 中文路徑寫圖"""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = str(path)
+    ext = Path(path).suffix
+    if ext == "":
+        ext = ".png"
 
-    ext = path.suffix or ".png"
     ok, encoded = cv2.imencode(ext, image)
     if not ok:
         return False
-    encoded.tofile(str(path))
+
+    encoded.tofile(path)
     return True
 
 
 def read_unicode_list(json_path, unicode_num):
-    """
-    讀取 CP950 JSON，轉成 U+XXXX / U+XXXXX 格式清單
-    對應 2_generate_CP950.py 的結構
-    """
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     cp950 = data["CP950"][:unicode_num]
-    return [
-        item["UNICODE"].replace("0x", "U+").upper()
-        for item in cp950
-    ]
+    return [f"U+{item['UNICODE'][2:6]}" for item in cp950]
 
 
 def ensure_clean_dir(directory):
@@ -72,14 +67,9 @@ def make_unique_filename(base_name, used_names):
 
 
 def remove_small_components(image, min_area_threshold):
-    """
-    image: 黑字白底灰階圖
-    去除小雜訊時，把小元件塗成白色
-    """
-    # 轉成白字黑底才適合 connected components
-    binary = cv2.threshold(image, 200, 255, cv2.THRESH_BINARY_INV)[1]
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
-
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        image, connectivity=8
+    )
     cleaned = image.copy()
     for label_idx in range(1, num_labels):
         area = stats[label_idx, cv2.CC_STAT_AREA]
@@ -89,9 +79,6 @@ def remove_small_components(image, min_area_threshold):
 
 
 def preprocess_cropped_image(cropped_gray, min_area_threshold):
-    """
-    小圖前處理：中值濾波 + 開運算 + 小雜訊清除
-    """
     median_filtered = cv2.medianBlur(cropped_gray, 3)
     kernel = np.ones((2, 2), np.uint8)
     opened = cv2.morphologyEx(median_filtered, cv2.MORPH_OPEN, kernel)
@@ -100,9 +87,6 @@ def preprocess_cropped_image(cropped_gray, min_area_threshold):
 
 
 def scale_adjustment(word_img, img_name, save_annotated=True):
-    """
-    以字的 bounding box 為中心，裁成固定 300x300
-    """
     word_img_copy = cv2.copyMakeBorder(
         word_img,
         BORDER_SIZE,
@@ -148,41 +132,36 @@ def scale_adjustment(word_img, img_name, save_annotated=True):
 
 
 def extract_page_number(path):
-    """
-    支援：
-    - page-001_qr-1.png
-    - page-001.png
-    - page-1.png
-    """
-    name = Path(path).name
+    name = path.name
     patterns = [
         r"page-(\d+)_qr-(\d+)\.png$",
         r"page-(\d+)\.png$",
     ]
+
     for pattern in patterns:
-        m = re.match(pattern, name, re.IGNORECASE)
-        if m:
-            return int(m.group(1))
+        match = re.match(pattern, name, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+
     return None
 
 
 def collect_page_images(input_folder, start_page, end_page):
     input_folder = Path(input_folder)
     candidates = []
+
     for path in input_folder.glob("*.png"):
         page_num = extract_page_number(path)
         if page_num is None:
             continue
         if start_page <= page_num <= end_page:
             candidates.append((page_num, path))
+
     candidates.sort(key=lambda x: x[0])
     return candidates
 
 
 def find_boxes_from_page(img_color, debug_name="debug"):
-    """
-    找整頁的外框。依參考稿紙版面，每頁應抓到 100 格。
-    """
     gray = cv2.cvtColor(img_color, cv2.COLOR_BGR2GRAY)
     binary = cv2.threshold(gray, 220, 255, cv2.THRESH_BINARY_INV)[1]
 
@@ -190,7 +169,9 @@ def find_boxes_from_page(img_color, debug_name="debug"):
     qr_size = int(min(img_h, img_w) * QR_RATIO)
     binary[-qr_size:, -qr_size:] = 0
 
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(
+        binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
 
     debug_dir = Path("debug_binary")
     debug_dir.mkdir(parents=True, exist_ok=True)
@@ -200,26 +181,15 @@ def find_boxes_from_page(img_color, debug_name="debug"):
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
 
-        # 只保留像稿紙格子的輪廓
-        if w < 110 or h < 110:
+        if w < 120 or h < 120:
             continue
 
         ratio = w / float(h)
-        if 0.75 <= ratio <= 1.25:
+        if 0.7 <= ratio <= 1.3:
             boxes.append((x, y, w, h))
 
-    # 依 1a_SVGtable.py 的 10x10 格局做 row-major 排序
-    boxes.sort(key=lambda b: (round(b[1] / 120), b[0]))
-
-    # 若抓超過 100，取前 100；若少於 100，保留原樣讓 log 告警
-    return boxes[:100]
-
-
-def draw_detected_boxes(img_color, boxes, output_path):
-    preview = img_color.copy()
-    for x, y, w, h in boxes:
-        cv2.rectangle(preview, (x, y), (x + w, y + h), (255, 0, 0), 2)
-    imwrite_unicode(output_path, preview)
+    boxes.sort(key=lambda b: (b[1] // 120, b[0]))
+    return boxes
 
 
 def crop_boxes(
@@ -243,6 +213,7 @@ def crop_boxes(
     used_names = defaultdict(int)
 
     page_images = collect_page_images(input_folder, start_page, end_page)
+
     if not page_images:
         print("找不到符合頁數範圍的圖片。")
         print(f"input_folder = {input_folder}")
@@ -250,7 +221,6 @@ def crop_boxes(
 
     print(f"共找到 {len(page_images)} 張頁面圖片")
 
-    # 依參考稿紙流程：每頁 100 字
     k = (start_page - 1) * 100
     total_saved = 0
 
@@ -265,14 +235,9 @@ def crop_boxes(
         boxes = find_boxes_from_page(img_color, debug_name=f"page_{page_num}")
         print(f"  detected boxes: {len(boxes)}")
 
-        if len(boxes) != 100:
-            print(f"  Warning: 預期 100 格，實際偵測 {len(boxes)} 格")
-
-        draw_detected_boxes(
-            img_color,
-            boxes,
-            bound_output_directory / f"page-{page_num}.png"
-        )
+        if not boxes:
+            print("  沒有偵測到可用方框")
+            continue
 
         page_saved = 0
 
@@ -305,10 +270,12 @@ def crop_boxes(
             if ok:
                 total_saved += 1
                 page_saved += 1
+                cv2.rectangle(img_color, (x2, y2), (x2 + w2, y2 + h2), (255, 0, 0), 2)
                 k += 1
             else:
                 print(f"  write failed: {out_path}")
 
+        imwrite_unicode(bound_output_directory / f"page-{page_num}.png", img_color)
         print(f"  saved on this page: {page_saved}")
 
     print(f"\n完成裁切，總共輸出 {total_saved} 張字圖")
