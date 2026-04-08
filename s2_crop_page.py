@@ -148,53 +148,31 @@ def preprocess_cropped_image(cropped_gray, min_area_threshold):
 
 def normalize_character_image(word_img, img_name, save_annotated=True, output_size=300):
     """
-    把單字圖：
-    1. 找緊外接框
-    2. 依比例加留白
-    3. 補成正方形
-    4. resize 成固定大小
-
-    這比固定中心裁切穩很多，不容易截斷筆畫。
+    改良版：
+    1. 先找真正字的外接框
+    2. 依字大小加 padding
+    3. 再額外加一圈安全邊界，避免像「賤」這種貼邊字被切掉
+    4. 補成正方形後 resize
     """
     if len(word_img.shape) == 3:
         gray = cv2.cvtColor(word_img, cv2.COLOR_BGR2GRAY)
     else:
         gray = word_img.copy()
 
-    # 找前景（黑字）
+    # 建議先在整張圖四周補白，避免一開始字就貼邊導致 boundingRect 太緊
+    gray = cv2.copyMakeBorder(
+        gray, 20, 20, 20, 20,
+        borderType=cv2.BORDER_CONSTANT,
+        value=255
+    )
+
     binary_inv = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)[1]
 
-    # 若沒抓到前景，直接輸出白底
     if cv2.countNonZero(binary_inv) == 0:
-        blank = np.full((output_size, output_size), 255, dtype=np.uint8)
-        return blank
+        return np.full((output_size, output_size), 255, dtype=np.uint8)
 
     x, y, w, h = cv2.boundingRect(binary_inv)
 
-    # 先做一層緊裁切
-    tight = gray[y:y + h, x:x + w]
-
-    # 依字大小加留白，避免筆畫貼邊
-    pad_x = max(12, int(w * 0.18))
-    pad_y = max(12, int(h * 0.18))
-
-    padded = cv2.copyMakeBorder(
-        tight,
-        pad_y, pad_y, pad_x, pad_x,
-        borderType=cv2.BORDER_CONSTANT,
-        value=255,
-    )
-
-    ph, pw = padded.shape[:2]
-    side = max(ph, pw)
-
-    # 補成正方形，置中
-    square = np.full((side, side), 255, dtype=np.uint8)
-    offset_y = (side - ph) // 2
-    offset_x = (side - pw) // 2
-    square[offset_y:offset_y + ph, offset_x:offset_x + pw] = padded
-
-    # optional debug
     if save_annotated:
         annotated_dir = Path("annotated_images")
         annotated_dir.mkdir(parents=True, exist_ok=True)
@@ -203,7 +181,36 @@ def normalize_character_image(word_img, img_name, save_annotated=True, output_si
         cv2.rectangle(annotated, (x, y), (x + w, y + h), (255, 168, 0), 2)
         imwrite_unicode(annotated_dir / f"{img_name}_annotated.png", annotated)
 
-    # 最後縮放
+    tight = gray[y:y + h, x:x + w]
+
+    # 基本 padding：依字尺寸決定
+    pad_x = max(18, int(w * 0.22))
+    pad_y = max(18, int(h * 0.22))
+
+    padded = cv2.copyMakeBorder(
+        tight,
+        pad_y, pad_y, pad_x, pad_x,
+        borderType=cv2.BORDER_CONSTANT,
+        value=255,
+    )
+
+    # 再加一層固定安全邊界，專門防止「賤、讓、籤、鬱」這種字被切到
+    safety = 24
+    padded = cv2.copyMakeBorder(
+        padded,
+        safety, safety, safety, safety,
+        borderType=cv2.BORDER_CONSTANT,
+        value=255,
+    )
+
+    ph, pw = padded.shape[:2]
+    side = max(ph, pw)
+
+    square = np.full((side, side), 255, dtype=np.uint8)
+    offset_y = (side - ph) // 2
+    offset_x = (side - pw) // 2
+    square[offset_y:offset_y + ph, offset_x:offset_x + pw] = padded
+
     result = cv2.resize(square, (output_size, output_size), interpolation=cv2.INTER_AREA)
     return result
 
