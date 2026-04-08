@@ -10,14 +10,11 @@ import cv2
 import numpy as np
 
 
-BORDER_SIZE = 50
-CROP_LENGTH = 200
-OUTPUT_SIZE = (300, 300)
+OUTPUT_SIZE = 300
 QR_RATIO = 0.12
 
 
 def imread_unicode(path, flags=cv2.IMREAD_COLOR):
-    """支援 Windows 中文路徑讀圖"""
     path = str(path)
     if not Path(path).exists():
         return None
@@ -28,10 +25,8 @@ def imread_unicode(path, flags=cv2.IMREAD_COLOR):
 
 
 def imwrite_unicode(path, image):
-    """支援 Windows 中文路徑寫圖"""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-
     ext = path.suffix or ".png"
     ok, encoded = cv2.imencode(ext, image)
     if not ok:
@@ -41,18 +36,11 @@ def imwrite_unicode(path, image):
 
 
 def read_unicode_list(json_path, unicode_num):
-    """
-    讀取 CP950 JSON，轉成 U+XXXX / U+XXXXX 格式清單
-    對應 2_generate_CP950.py 的結構
-    """
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     cp950 = data["CP950"][:unicode_num]
-    return [
-        item["UNICODE"].replace("0x", "U+").upper()
-        for item in cp950
-    ]
+    return [item["UNICODE"].replace("0x", "U+").upper() for item in cp950]
 
 
 def ensure_clean_dir(directory):
@@ -71,89 +59,7 @@ def make_unique_filename(base_name, used_names):
     return f"{base_name}_{count}.png"
 
 
-def remove_small_components(image, min_area_threshold):
-    """
-    image: 黑字白底灰階圖
-    去除小雜訊時，把小元件塗成白色
-    """
-    # 轉成白字黑底才適合 connected components
-    binary = cv2.threshold(image, 200, 255, cv2.THRESH_BINARY_INV)[1]
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
-
-    cleaned = image.copy()
-    for label_idx in range(1, num_labels):
-        area = stats[label_idx, cv2.CC_STAT_AREA]
-        if area < min_area_threshold:
-            cleaned[labels == label_idx] = 255
-    return cleaned
-
-
-def preprocess_cropped_image(cropped_gray, min_area_threshold):
-    """
-    小圖前處理：中值濾波 + 開運算 + 小雜訊清除
-    """
-    median_filtered = cv2.medianBlur(cropped_gray, 3)
-    kernel = np.ones((2, 2), np.uint8)
-    opened = cv2.morphologyEx(median_filtered, cv2.MORPH_OPEN, kernel)
-    cleaned = remove_small_components(opened, min_area_threshold)
-    return cleaned
-
-
-def scale_adjustment(word_img, img_name, save_annotated=True):
-    """
-    以字的 bounding box 為中心，裁成固定 300x300
-    """
-    word_img_copy = cv2.copyMakeBorder(
-        word_img,
-        BORDER_SIZE,
-        BORDER_SIZE,
-        BORDER_SIZE,
-        BORDER_SIZE,
-        cv2.BORDER_CONSTANT,
-        value=255,
-    )
-
-    if len(word_img_copy.shape) == 3:
-        gray = cv2.cvtColor(word_img_copy, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = word_img_copy
-
-    binary = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)[1]
-
-    if cv2.countNonZero(binary) == 0:
-        return cv2.resize(word_img_copy, OUTPUT_SIZE, interpolation=cv2.INTER_AREA)
-
-    x, y, w, h = cv2.boundingRect(binary)
-    c_x, c_y = x + w // 2, y + h // 2
-
-    if save_annotated:
-        annotated_dir = Path("annotated_images")
-        annotated_dir.mkdir(parents=True, exist_ok=True)
-
-        annotated_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-        cv2.rectangle(annotated_img, (x, y), (x + w, y + h), (255, 168, 0), 2)
-        cv2.circle(annotated_img, (c_x, c_y), 6, (0, 0, 255), -1)
-        imwrite_unicode(annotated_dir / f"{img_name}_annotated.png", annotated_img)
-
-    half = CROP_LENGTH // 2
-    img_h, img_w = word_img_copy.shape[:2]
-
-    left = max(0, c_x - half)
-    right = min(img_w, c_x + half)
-    top = max(0, c_y - half)
-    bottom = min(img_h, c_y + half)
-
-    final_word_img = word_img_copy[top:bottom, left:right]
-    return cv2.resize(final_word_img, OUTPUT_SIZE, interpolation=cv2.INTER_AREA)
-
-
 def extract_page_number(path):
-    """
-    支援：
-    - page-001_qr-1.png
-    - page-001.png
-    - page-1.png
-    """
     name = Path(path).name
     patterns = [
         r"page-(\d+)_qr-(\d+)\.png$",
@@ -180,9 +86,6 @@ def collect_page_images(input_folder, start_page, end_page):
 
 
 def find_boxes_from_page(img_color, debug_name="debug"):
-    """
-    找整頁的外框。依參考稿紙版面，每頁應抓到 100 格。
-    """
     gray = cv2.cvtColor(img_color, cv2.COLOR_BGR2GRAY)
     binary = cv2.threshold(gray, 220, 255, cv2.THRESH_BINARY_INV)[1]
 
@@ -200,7 +103,6 @@ def find_boxes_from_page(img_color, debug_name="debug"):
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
 
-        # 只保留像稿紙格子的輪廓
         if w < 110 or h < 110:
             continue
 
@@ -208,10 +110,7 @@ def find_boxes_from_page(img_color, debug_name="debug"):
         if 0.75 <= ratio <= 1.25:
             boxes.append((x, y, w, h))
 
-    # 依 1a_SVGtable.py 的 10x10 格局做 row-major 排序
     boxes.sort(key=lambda b: (round(b[1] / 120), b[0]))
-
-    # 若抓超過 100，取前 100；若少於 100，保留原樣讓 log 告警
     return boxes[:100]
 
 
@@ -220,6 +119,93 @@ def draw_detected_boxes(img_color, boxes, output_path):
     for x, y, w, h in boxes:
         cv2.rectangle(preview, (x, y), (x + w, y + h), (255, 0, 0), 2)
     imwrite_unicode(output_path, preview)
+
+
+def clean_small_noise(gray_img, min_area_threshold=10):
+    """
+    黑字白底灰階圖 -> 清掉太小的黑色雜訊
+    """
+    inv = cv2.threshold(gray_img, 200, 255, cv2.THRESH_BINARY_INV)[1]
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(inv, connectivity=8)
+
+    cleaned_inv = inv.copy()
+    for i in range(1, num_labels):
+        area = stats[i, cv2.CC_STAT_AREA]
+        if area < min_area_threshold:
+            cleaned_inv[labels == i] = 0
+
+    cleaned = 255 - cleaned_inv
+    return cleaned
+
+
+def preprocess_cropped_image(cropped_gray, min_area_threshold):
+    median_filtered = cv2.medianBlur(cropped_gray, 3)
+    kernel = np.ones((2, 2), np.uint8)
+    opened = cv2.morphologyEx(median_filtered, cv2.MORPH_OPEN, kernel)
+    cleaned = clean_small_noise(opened, min_area_threshold)
+    return cleaned
+
+
+def normalize_character_image(word_img, img_name, save_annotated=True, output_size=300):
+    """
+    把單字圖：
+    1. 找緊外接框
+    2. 依比例加留白
+    3. 補成正方形
+    4. resize 成固定大小
+
+    這比固定中心裁切穩很多，不容易截斷筆畫。
+    """
+    if len(word_img.shape) == 3:
+        gray = cv2.cvtColor(word_img, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = word_img.copy()
+
+    # 找前景（黑字）
+    binary_inv = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)[1]
+
+    # 若沒抓到前景，直接輸出白底
+    if cv2.countNonZero(binary_inv) == 0:
+        blank = np.full((output_size, output_size), 255, dtype=np.uint8)
+        return blank
+
+    x, y, w, h = cv2.boundingRect(binary_inv)
+
+    # 先做一層緊裁切
+    tight = gray[y:y + h, x:x + w]
+
+    # 依字大小加留白，避免筆畫貼邊
+    pad_x = max(12, int(w * 0.18))
+    pad_y = max(12, int(h * 0.18))
+
+    padded = cv2.copyMakeBorder(
+        tight,
+        pad_y, pad_y, pad_x, pad_x,
+        borderType=cv2.BORDER_CONSTANT,
+        value=255,
+    )
+
+    ph, pw = padded.shape[:2]
+    side = max(ph, pw)
+
+    # 補成正方形，置中
+    square = np.full((side, side), 255, dtype=np.uint8)
+    offset_y = (side - ph) // 2
+    offset_x = (side - pw) // 2
+    square[offset_y:offset_y + ph, offset_x:offset_x + pw] = padded
+
+    # optional debug
+    if save_annotated:
+        annotated_dir = Path("annotated_images")
+        annotated_dir.mkdir(parents=True, exist_ok=True)
+
+        annotated = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        cv2.rectangle(annotated, (x, y), (x + w, y + h), (255, 168, 0), 2)
+        imwrite_unicode(annotated_dir / f"{img_name}_annotated.png", annotated)
+
+    # 最後縮放
+    result = cv2.resize(square, (output_size, output_size), interpolation=cv2.INTER_AREA)
+    return result
 
 
 def crop_boxes(
@@ -250,7 +236,6 @@ def crop_boxes(
 
     print(f"共找到 {len(page_images)} 張頁面圖片")
 
-    # 依參考稿紙流程：每頁 100 字
     k = (start_page - 1) * 100
     total_saved = 0
 
@@ -265,9 +250,6 @@ def crop_boxes(
         boxes = find_boxes_from_page(img_color, debug_name=f"page_{page_num}")
         print(f"  detected boxes: {len(boxes)}")
 
-        if len(boxes) != 100:
-            print(f"  Warning: 預期 100 格，實際偵測 {len(boxes)} 格")
-
         draw_detected_boxes(
             img_color,
             boxes,
@@ -280,6 +262,7 @@ def crop_boxes(
             if k >= unicode_num:
                 break
 
+            # 內縮去掉外框線
             x2 = x + padding
             y2 = y + padding
             w2 = w - 2 * padding
@@ -296,7 +279,13 @@ def crop_boxes(
 
             cropped_gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
             processed = preprocess_cropped_image(cropped_gray, min_area_threshold)
-            final_img = scale_adjustment(processed, unicode_list[k])
+
+            final_img = normalize_character_image(
+                processed,
+                unicode_list[k],
+                save_annotated=True,
+                output_size=OUTPUT_SIZE,
+            )
 
             filename = make_unique_filename(unicode_list[k], used_names)
             out_path = output_folder / filename
