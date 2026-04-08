@@ -40,7 +40,6 @@ def imwrite_unicode(path, image):
 def read_unicode_list(json_path, unicode_num):
     """
     讀取 CP950 JSON，轉成 U+XXXX / U+XXXXX 格式清單
-    對應 2_generate_CP950.py 的結構
     """
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -125,7 +124,6 @@ def find_boxes_from_page(img_color, debug_name="debug"):
         if 0.75 <= ratio <= 1.25:
             boxes.append((x, y, w, h))
 
-    # row-major 排序：由上到下、由左到右
     boxes.sort(key=lambda b: (round(b[1] / 120), b[0]))
     return boxes[:100]
 
@@ -161,30 +159,53 @@ def preprocess_cropped_image(cropped_gray, min_area_threshold):
     cleaned = clean_small_noise(opened, min_area_threshold)
     return cleaned
 
-
-def erase_border_lines(gray_img, border=8):
-    """
-    將裁下來的小圖四周邊界直接塗白，去掉稿紙框線殘留
-    """
+"""
+def erase_border_lines(gray_img, border=12):
+    """'''
+    只移除像稿紙框線的細長邊界元件，
+    避免把真的字刪掉。
+    '''"""
     result = gray_img.copy()
-    h, w = result.shape[:2]
 
-    result[:border, :] = 255
-    result[h - border:h, :] = 255
-    result[:, :border] = 255
-    result[:, w - border:w] = 255
+    binary_inv = cv2.threshold(result, 200, 255, cv2.THRESH_BINARY_INV)[1]
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary_inv, connectivity=8)
 
-    return result
+    h, w = binary_inv.shape
+    cleaned_inv = binary_inv.copy()
+
+    for lab in range(1, num_labels):
+        x = stats[lab, cv2.CC_STAT_LEFT]
+        y = stats[lab, cv2.CC_STAT_TOP]
+        ww = stats[lab, cv2.CC_STAT_WIDTH]
+        hh = stats[lab, cv2.CC_STAT_HEIGHT]
+        area = stats[lab, cv2.CC_STAT_AREA]
+
+        touches_top = y <= border
+        touches_bottom = (y + hh) >= (h - border)
+        touches_left = x <= border
+        touches_right = (x + ww) >= (w - border)
+
+        is_top_horizontal_line = touches_top and hh <= 12 and ww >= int(w * 0.45)
+        is_bottom_horizontal_line = touches_bottom and hh <= 12 and ww >= int(w * 0.45)
+
+        is_left_vertical_line = touches_left and ww <= 12 and hh >= int(h * 0.45)
+        is_right_vertical_line = touches_right and ww <= 12 and hh >= int(h * 0.45)
+
+        looks_like_border = (
+            is_top_horizontal_line
+            or is_bottom_horizontal_line
+            or is_left_vertical_line
+            or is_right_vertical_line
+        ) and area <= int(h * w * 0.12)
+
+        if looks_like_border:
+            cleaned_inv[labels == lab] = 0
+
+    return 255 - cleaned_inv
+    """
 
 
 def normalize_character_image(word_img, img_name, save_annotated=True, output_size=300):
-    """
-    1. 先補白，避免原始字貼邊
-    2. 找字的緊外接框
-    3. 動態加 padding
-    4. 再加固定安全邊界
-    5. 補成正方形 resize
-    """
     if len(word_img.shape) == 3:
         gray = cv2.cvtColor(word_img, cv2.COLOR_BGR2GRAY)
     else:
@@ -192,7 +213,7 @@ def normalize_character_image(word_img, img_name, save_annotated=True, output_si
 
     gray = cv2.copyMakeBorder(
         gray,
-        28, 28, 28, 28,
+        20, 20, 20, 20,
         borderType=cv2.BORDER_CONSTANT,
         value=255
     )
@@ -214,8 +235,8 @@ def normalize_character_image(word_img, img_name, save_annotated=True, output_si
 
     tight = gray[y:y + h, x:x + w]
 
-    pad_x = max(22, int(w * 0.28))
-    pad_y = max(22, int(h * 0.28))
+    pad_x = max(12, int(w * 0.16))
+    pad_y = max(12, int(h * 0.16))
 
     padded = cv2.copyMakeBorder(
         tight,
@@ -224,7 +245,7 @@ def normalize_character_image(word_img, img_name, save_annotated=True, output_si
         value=255,
     )
 
-    safety = 28
+    safety = 12
     padded = cv2.copyMakeBorder(
         padded,
         safety, safety, safety, safety,
@@ -300,11 +321,11 @@ def crop_boxes(
             if k >= unicode_num:
                 break
 
-            # 小幅內縮，盡量保留字；框線改由 erase_border_lines 處理
-            pad_left = 4
-            pad_right = 4
-            pad_top = 4
-            pad_bottom = 4
+            # 小幅內縮
+            pad_left = 8
+            pad_right = 8
+            pad_top = 10
+            pad_bottom = 8
 
             x2 = x + pad_left
             y2 = y + pad_top
@@ -322,8 +343,8 @@ def crop_boxes(
 
             cropped_gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
             processed = preprocess_cropped_image(cropped_gray, min_area_threshold)
-            processed = erase_border_lines(processed, border=10)
 
+            # 不做 erase_border_lines，避免把貼邊筆畫誤刪
             final_img = normalize_character_image(
                 processed,
                 unicode_list[k],
@@ -349,16 +370,16 @@ def crop_boxes(
 
 
 if __name__ == "__main__":
-    input_folder = r"c:\Users\ChengYu\Desktop\ai2026s\ai2026s\hw02\02-1_crop_paper\rotated_113590051_楊承諭_千字文"
-    output_folder = r"crop\crop_千字文"
+    input_folder = r"c:\Users\ChengYu\Desktop\ai2026s\ai2026s\hw02\02-1_crop_paper\rotated_113590051_楊承諭_元素週期表"
+    output_folder = r"crop\crop_元素週期表"
 
     start_page = int(input("Enter start page: "))
     end_page = int(input("Enter end page: "))
 
     min_box_size = 120
     min_area_threshold = 10
-    json_path = r".\CP950\CP950-千字文.json"
-    unicode_num = 1000
+    json_path = r".\CP950\CP950-元素週期表.json"
+    unicode_num = 118
 
     crop_boxes(
         input_folder=input_folder,
