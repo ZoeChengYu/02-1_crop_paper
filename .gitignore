@@ -5,6 +5,8 @@ rotated_*/
 annotated_images/
 crop_*/
 rec_bound/
+rotation/*.pdf
+.vscode/
 
 CP950-*
 CP950/
