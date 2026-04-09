@@ -370,16 +370,16 @@ def crop_boxes(
 
 
 if __name__ == "__main__":
-    input_folder = r"c:\Users\ChengYu\Desktop\ai2026s\ai2026s\hw02\02-1_crop_paper\rotated_113590051_楊承諭_元素週期表"
-    output_folder = r"crop\crop_元素週期表"
+    input_folder = r"c:\Users\ChengYu\Desktop\ai2026s\ai2026s\hw02\02-1_crop_paper\rotated_113590051_楊承諭_標點符號"
+    output_folder = r"crop\crop_標點符號"
 
     start_page = int(input("Enter start page: "))
     end_page = int(input("Enter end page: "))
 
     min_box_size = 120
     min_area_threshold = 10
-    json_path = r".\CP950\CP950-元素週期表.json"
-    unicode_num = 118
+    json_path = r".\CP950\CP950-標點符號.json"
+    unicode_num = 356
 
     crop_boxes(
         input_folder=input_folder,
